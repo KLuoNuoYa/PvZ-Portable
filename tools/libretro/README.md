@@ -165,14 +165,15 @@ tools\libretro\build_libretro.bat Release --openmpt  :: 链接 libopenmpt，MO3 
 
 产物：`build-libretro\pvz_libretro.dll`，并自动暂存到 `dist\cores\pvz_libretro.dll`。
 
-CMake 也可直接用：
+CMake 也可直接用（`%MSYS%` 由 `_find_toolchain.bat` 导出；手敲时换成你的 MinGW 根目录，
+例如 `C:\path\to\mingw64`）：
 
 ```bat
 cmake -G "MinGW Makefiles" -S . -B build-libretro ^
       -DCMAKE_BUILD_TYPE=Release ^
-      -DCMAKE_C_COMPILER=D:/msys64/mingw64/bin/gcc.exe ^
-      -DCMAKE_CXX_COMPILER=D:/msys64/mingw64/bin/g++.exe ^
-      -DCMAKE_PREFIX_PATH=D:/msys64/mingw64 ^
+      -DCMAKE_C_COMPILER=%MSYS%/bin/gcc.exe ^
+      -DCMAKE_CXX_COMPILER=%MSYS%/bin/g++.exe ^
+      -DCMAKE_PREFIX_PATH=%MSYS% ^
       -DBUILD_STATIC=ON -DLIBRETRO=ON
 cmake --build build-libretro --parallel
 ```

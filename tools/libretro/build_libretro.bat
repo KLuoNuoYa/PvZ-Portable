@@ -8,8 +8,8 @@ rem   * CMake shipped with Visual Studio
 rem
 rem Paths are auto-detected from the usual install locations.  Override any of
 rem them with an environment variable, e.g.
-rem     set MSYS=C:\msys64\ucrt64
-rem     set VSCMAKE=C:\Program Files\Microsoft Visual Studio\2022\Community\...\CMake\bin
+rem     set MSYS=C:\path\to\mingw64
+rem     set VSCMAKE=C:\path\to\cmake\bin
 rem
 rem Usage:
 rem   tools\libretro\build_libretro.bat [Release|Debug] [--openmpt] [--clean]
