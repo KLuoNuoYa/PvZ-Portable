@@ -28,6 +28,10 @@
 #include <set>
 #include <SDL.h>
 
+#ifdef __LIBRETRO__
+#include "platform/libretro/LibretroBackend.h"
+#endif
+
 using namespace Sexy;
 
 inline int QueryCounters(int64_t *lpPerformanceCount)
@@ -41,6 +45,10 @@ PerfTimer::PerfTimer()
 	mDuration = 0;
 	mStart = 0;
 	mRunning = false;
+#ifdef __LIBRETRO__
+	mUseGameClock = false;
+	mGameClockStart = 0;
+#endif
 }
 
 void PerfTimer::CalcDuration()
@@ -52,12 +60,30 @@ void PerfTimer::CalcDuration()
 
 void PerfTimer::Start()
 {
+#ifdef __LIBRETRO__
+	if (mUseGameClock)
+	{
+		mGameClockStart = PvzLibretro::GameTimeMs();
+		mRunning = true;
+		return;
+	}
+#endif
+
 	mRunning = true;
 	mStart = SDL_GetPerformanceCounter();
 }
 
 void PerfTimer::SetStartTime(int theTimeMillisecondsAgo)
 {
+#ifdef __LIBRETRO__
+	if (mUseGameClock)
+	{
+		mGameClockStart = PvzLibretro::GameTimeMs() - static_cast<uint32_t>(theTimeMillisecondsAgo);
+		mRunning = true;
+		return;
+	}
+#endif
+
 	mStart = SDL_GetPerformanceCounter() - static_cast<int64_t>(theTimeMillisecondsAgo) * SDL_GetPerformanceFrequency() / 1000;
 	mRunning = true;
 }
@@ -73,11 +99,24 @@ void PerfTimer::Stop()
 
 double PerfTimer::GetDuration()
 {
+#ifdef __LIBRETRO__
+	if (mUseGameClock)
+		return static_cast<double>(PvzLibretro::GameTimeMs() - mGameClockStart);
+#endif
+
 	if(mRunning)
 		CalcDuration();
 
 	return mDuration;
 }
+
+#ifdef __LIBRETRO__
+void PerfTimer::UseGameClock(bool theUse)
+{
+	mUseGameClock = theUse;
+	mGameClockStart = PvzLibretro::GameTimeMs();
+}
+#endif
 
 struct PerfInfo
 {

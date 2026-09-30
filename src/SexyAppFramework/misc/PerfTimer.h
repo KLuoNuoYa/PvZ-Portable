@@ -36,6 +36,10 @@ protected:
 	int64_t mStart;
 	double mDuration;
 	bool mRunning;
+#ifdef __LIBRETRO__
+	bool mUseGameClock;
+	uint32_t mGameClockStart;
+#endif
 
 	void CalcDuration();
 
@@ -44,6 +48,16 @@ public:
 	void Start();
 	void Stop();
 	void SetStartTime(int theTimeMillisecondsAgo);
+
+#ifdef __LIBRETRO__
+	// Measure on the clock the game itself runs on (PvzLibretro::GameTimeMs())
+	// instead of the wall clock.  The two differ exactly while the frontend is
+	// fast-forwarding, where the backend advances game time by one frame per
+	// retro_run() - which is how the audio bridge advances the music too.  So
+	// anything that has to stay in step with the music (the credits movie) has to
+	// be measured on this clock, or the picture falls behind the sound.
+	void UseGameClock(bool theUse);
+#endif
 
 	double GetDuration();
 };

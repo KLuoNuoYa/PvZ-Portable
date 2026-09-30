@@ -74,6 +74,10 @@
 #include "widget/Dialog.h"
 #include "SexyAppFramework/resource.h"
 
+#ifdef __LIBRETRO__
+#include "SexyAppFramework/platform/libretro/LibretroBackend.h"
+#endif
+
 bool gIsPartnerBuild = false;
 bool gSlowMo = false;
 bool gFastMo = false;
@@ -762,6 +766,14 @@ void LawnApp::DoCreateUserDialog()
 	KillDialog(Dialogs::DIALOG_CREATEUSER);
 
 	NewUserDialog* aDialog = new NewUserDialog(this, false);
+#ifdef __LIBRETRO__
+	// A frontend that cannot deliver typed text would leave the player stuck
+	// here: PvZ refuses to create a profile with an empty name, and there is no
+	// way back to the game.  Seed a default name instead - SetName() selects it,
+	// so a player who does have a keyboard still just types over it.
+	if (!PvzLibretro::FrontendHasKeyboard())
+		aDialog->SetName("Player");
+#endif
 	CenterDialog(aDialog, aDialog->mWidth, aDialog->mHeight);
 	AddDialog(Dialogs::DIALOG_CREATEUSER, aDialog);
 }

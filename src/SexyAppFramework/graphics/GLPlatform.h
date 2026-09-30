@@ -54,12 +54,35 @@
 	"#define FRAG_OUT gl_FragColor\n" \
 	"#define TEX2D texture2D\n"
 
+// GLSL 1.50 core profile.  Desktop *core* contexts (e.g. the one RetroArch
+// creates for its "glcore" video driver) reject GLSL 1.20 and the legacy
+// attribute/varying/gl_FragColor/texture2D keywords, so the same shader body is
+// compiled with these macros as a fallback.
+#define GLSL_VERT_MACROS_CORE \
+	"#define VERT_IN in\n" \
+	"#define V2F out\n"
+
+#define GLSL_FRAG_MACROS_CORE \
+	"#define V2F in\n" \
+	"#define FRAG_OUT fragColor\n" \
+	"#define TEX2D texture\n" \
+	"out vec4 fragColor;\n"
+
 // When true, a desktop GL compatibility context is in use and shaders
 extern bool gDesktopGLFallback;
 
+#ifdef __LIBRETRO__
+// Resolve GL entry points through the libretro frontend's get_proc_address hook
+// (implemented in platform/libretro/LibretroBackend.cpp).
+void LibretroLoadGLFunctions();
+#endif
+
 inline void PlatformGLInit()
 {
-#ifdef __SWITCH__
+#ifdef __LIBRETRO__
+	// The libretro frontend owns the GL context; ask it for the entry points.
+	LibretroLoadGLFunctions();
+#elif defined(__SWITCH__)
 	gladLoadGLES2((GLADloadfunc)eglGetProcAddress);
 #else
 	gladLoadGLES2((GLADloadfunc)SDL_GL_GetProcAddress);

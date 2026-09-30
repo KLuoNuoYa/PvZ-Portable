@@ -29,6 +29,8 @@
 #include "WidgetManager.h"
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
+#elif defined(__LIBRETRO__)
+#include "platform/libretro/LibretroBackend.h"
 #endif
 #include "graphics/Font.h"
 
@@ -432,7 +434,25 @@ int Dialog::WaitForResult(bool autoKill)
 			emscripten_sleep(0);
 	}
 #else
+	// libretro: the core cannot hand control back to the frontend from inside
+	// retro_run(), so a plain spin would leave the dialog undrawn (the frontend
+	// only presents after retro_run returns) and would never see the click that
+	// answers it.  Pump one frame per iteration instead: re-read input, present,
+	// and yield.  See PvzLibretro::PumpBlockingWait().
+#ifdef __LIBRETRO__
+	while ((gSexyAppBase->UpdateAppStep(nullptr)) && (mWidgetManager != nullptr) && (mResult == 0x7FFFFFFF))
+	{
+		// Finish the whole frame before handing control back.  One
+		// UpdateAppStep() is only half a frame (the state machine alternates
+		// between message handling and processing), so yielding after a single
+		// step would present a half-updated frame and halve the visible frame
+		// rate while the dialog is up.
+		PvzLibretro::CompletePendingFrame();
+		PvzLibretro::YieldToFrontend();
+	}
+#else
 	while ((gSexyAppBase->UpdateAppStep(nullptr)) && (mWidgetManager != nullptr) && (mResult == 0x7FFFFFFF));
+#endif
 #endif
 
 	if (autoKill)

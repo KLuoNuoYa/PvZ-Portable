@@ -337,6 +337,15 @@ CreditScreen::CreditScreen(LawnApp* theApp)
 	mCreditsPaused = false;
 	mPreloaded = false;
 
+#ifdef __LIBRETRO__
+	// The movie is pinned to the song, and the song is advanced by the audio the
+	// core renders - one frame of samples per retro_run().  On the wall clock the
+	// two only agree at normal speed: while fast-forwarding, the music runs at the
+	// frontend's frame rate and a wall-clock movie would be left behind.  Measure
+	// it on the game clock instead, which fast-forward moves in step with the audio.
+	mTimerSinceStart.UseGameClock(true);
+#endif
+
 	mApp->mEffectSystem->EffectSystemFreeAll();
 	mApp->mMusic->StopAllMusic();
 	mLoadedResourceNames.push_back("DelayLoad_Credits");

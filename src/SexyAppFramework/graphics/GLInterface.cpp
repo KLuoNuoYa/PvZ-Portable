@@ -35,6 +35,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <string>
 #include <vector>
 
 constexpr const int MAX_VERTICES = 16384;
@@ -85,6 +86,9 @@ static GLenum gVertexMode;
 static GLuint gProgram;
 static GLuint gVbo;
 static GLint gUfViewProjMtx, gUfTexture, gUfUseTexture, gUfUvBounds, gUfClampUvEnabled;
+
+static float gOrthoMatrix[16];
+static bool gOrthoMatrixValid = false;
 
 static void GfxBegin(GLenum vertexMode)
 {
@@ -203,15 +207,11 @@ V2F vec2 v_uv;
 #endif
 )DELIMITER";
 
-static GLuint shaderCompile(const char *src, uint32_t srcLen, GLenum type)
+// Compiles one shader variant.  Returns 0 and fills outLog on failure.
+static GLuint CompileShaderVariant(const char *src, uint32_t srcLen, GLenum type,
+	const char *versionLine, const char *macros, std::string &outLog)
 {
-	// GLSL ES 1.00 for native ES contexts; GLSL 1.20 for desktop GL fallback.
-	const char *versionLine = gDesktopGLFallback
-		? "#version 120\n"
-		: "#version 100\nprecision mediump float;\n";
-	const char *macros = (type == GL_VERTEX_SHADER)
-		? GLSL_VERT_MACROS "#define VERTEX\n"
-		: GLSL_FRAG_MACROS "#define FRAGMENT\n";
+	outLog.clear();
 
 	const GLchar *strings[3]  = { versionLine, macros, src };
 	GLint         lengths[3]  = { (GLint)strlen(versionLine), (GLint)strlen(macros), (GLint)srcLen };
@@ -224,20 +224,63 @@ static GLuint shaderCompile(const char *src, uint32_t srcLen, GLenum type)
 	glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
 	if (!ok)
 	{
-		GLint logLen;
+		GLint logLen = 0;
 		glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &logLen);
-		char *log = (char*)malloc(logLen);
-		glGetShaderInfoLog(shader, logLen, &logLen, log);
-		Sexy::LogInfoLn("Shader error: {}\n{}{}{}", log, strings[0], strings[1], strings[2]);
-		free(log);
+		if (logLen > 0)
+		{
+			std::vector<char> log(logLen);
+			glGetShaderInfoLog(shader, logLen, &logLen, log.data());
+			outLog.assign(log.data());
+		}
 		glDeleteShader(shader);
-		if (gSexyAppBase != nullptr)
-			gSexyAppBase->Shutdown();
-		else
-			exit(1);
 		return 0;
 	}
 	return shader;
+}
+
+static GLuint shaderCompile(const char *src, uint32_t srcLen, GLenum type)
+{
+	const bool isVertex = (type == GL_VERTEX_SHADER);
+
+	// Primary: GLSL ES 1.00 for ES contexts, GLSL 1.20 for desktop GL.
+	const char *versionLine = gDesktopGLFallback
+		? "#version 120\n"
+		: "#version 100\nprecision mediump float;\n";
+	const char *macros = isVertex
+		? GLSL_VERT_MACROS "#define VERTEX\n"
+		: GLSL_FRAG_MACROS "#define FRAGMENT\n";
+
+	std::string aLog;
+	GLuint shader = CompileShaderVariant(src, srcLen, type, versionLine, macros, aLog);
+	if (shader != 0)
+		return shader;
+
+	// A desktop *core* profile rejects GLSL 1.20 and its legacy keywords.
+	// Frontends regularly hand cores a core context (RetroArch's "glcore" video
+	// driver does), so retry the same body as GLSL 1.50 core before giving up.
+	if (gDesktopGLFallback)
+	{
+		const char *coreMacros = isVertex
+			? GLSL_VERT_MACROS_CORE "#define VERTEX\n"
+			: GLSL_FRAG_MACROS_CORE "#define FRAGMENT\n";
+
+		std::string aCoreLog;
+		shader = CompileShaderVariant(src, srcLen, type, "#version 150 core\n", coreMacros, aCoreLog);
+		if (shader != 0)
+		{
+			Sexy::LogInfoLn("Desktop GL core profile detected; using GLSL 1.50 shaders.");
+			return shader;
+		}
+		aLog += "\n[core-profile attempt]\n";
+		aLog += aCoreLog;
+	}
+
+	Sexy::LogInfoLn("Shader error: {}\n{}{}{}", aLog, versionLine, macros, src);
+	if (gSexyAppBase != nullptr)
+		gSexyAppBase->Shutdown();
+	else
+		exit(1);
+	return 0;
 }
 
 static GLuint shaderLoad(const char *src)
@@ -1157,6 +1200,13 @@ GLImage* GLInterface::GetScreenImage() { return mScreenImage.get(); }
 
 void GLInterface::UpdateViewport()
 {
+#ifdef __LIBRETRO__
+	// The frontend owns scaling and letterboxing: the core always renders the
+	// full game frame into the framebuffer it was handed.
+	mPresentationRect = Rect(0, 0, mWidth, mHeight);
+	glViewport(0, 0, mWidth, mHeight);
+	return;
+#else
 	int vx = 0, vy = 0, vw, vh;
 
 #ifdef __SWITCH__
@@ -1182,7 +1232,52 @@ void GLInterface::UpdateViewport()
 
 	glViewport(vx, vy, vw, vh);
 	mPresentationRect = Rect(vx, vy, vw, vh);
+#endif // __LIBRETRO__
 }
+
+#ifdef __LIBRETRO__
+namespace Sexy
+{
+// Frontends are free to leave arbitrary GL state behind between retro_run()
+// calls, so the renderer's state is re-established once per frame.  Must run
+// with the frontend's context current.
+void GfxReapplyState()
+{
+	if (gProgram == 0 || !gOrthoMatrixValid)
+		return;
+
+	glUseProgram(gProgram);
+
+	glBindBuffer(GL_ARRAY_BUFFER, gVbo);
+	glVertexAttribPointer(0, 3, GL_FLOAT,         GL_FALSE, sizeof(GLVertex), (const void*)0);
+	glEnableVertexAttribArray(0);
+	glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE,  sizeof(GLVertex), (const void*)(sizeof(float)*3));
+	glEnableVertexAttribArray(1);
+	glVertexAttribPointer(2, 2, GL_FLOAT,         GL_FALSE, sizeof(GLVertex), (const void*)(sizeof(float)*3 + sizeof(uint32_t)));
+	glEnableVertexAttribArray(2);
+
+	glUniformMatrix4fv(gUfViewProjMtx, 1, GL_FALSE, gOrthoMatrix);
+	glUniform1i(gUfTexture, 0);
+	glUniform1i(gUfClampUvEnabled, 1);
+
+	glEnable(GL_BLEND);
+	glDisable(GL_DITHER);
+	glDisable(GL_DEPTH_TEST);
+	glDisable(GL_CULL_FACE);
+	glDisable(GL_SCISSOR_TEST);
+	glDisable(GL_FRAMEBUFFER_SRGB); // not in GLES 2.0; the error is cleared below
+
+	// Drop the cached state so the next draw re-issues the real calls.
+	gBlendSrc = 0;
+	gBlendDst = 0;
+	SetBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	gVertexMode = (GLenum)-1;
+	gNumVertices = 0;
+
+	glGetError();
+}
+} // namespace Sexy
+#endif // __LIBRETRO__
 
 int GLInterface::Init(bool IsWindowed)
 {
@@ -1191,6 +1286,20 @@ int GLInterface::Init(bool IsWindowed)
 	{
 		inited = true;
 		PlatformGLInit();
+
+#ifdef __LIBRETRO__
+		// Make the obtained context visible in the frontend log: the shader
+		// dialect depends on whether it is ES, desktop compatibility or core.
+		{
+			const char *aVersion = (const char *)glGetString(GL_VERSION);
+			const char *aGLSL    = (const char *)glGetString(GL_SHADING_LANGUAGE_VERSION);
+			const char *aVendor  = (const char *)glGetString(GL_VENDOR);
+			Sexy::LogInfoLn("GL context: {} | GLSL: {} | vendor: {}",
+				aVersion ? aVersion : "(unknown)",
+				aGLSL ? aGLSL : "(unknown)",
+				aVendor ? aVendor : "(unknown)");
+		}
+#endif
 
 		gProgram = shaderLoad(SHADER_CODE);
 		if (gProgram == 0)
@@ -1231,6 +1340,8 @@ int GLInterface::Init(bool IsWindowed)
 	glUseProgram(gProgram);
 	float ortho[16];
 	MakeOrthoMatrix(0, (float)mWidth, (float)mHeight, 0, -10, 10, ortho);
+	memcpy(gOrthoMatrix, ortho, sizeof(gOrthoMatrix));
+	gOrthoMatrixValid = true;
 	glUniformMatrix4fv(gUfViewProjMtx, 1, GL_FALSE, ortho);
 	glUniform1i(gUfTexture, 0);
 	glUniform1i(gUfClampUvEnabled, 1);
@@ -1282,15 +1393,24 @@ bool GLInterface::PreDraw()
 void GLInterface::Flush()
 {
 	gNumVertices = 0;
-#ifdef __SWITCH__
+#ifdef __LIBRETRO__
+	// There is no window to swap: the frontend presents the framebuffer the core
+	// rendered into once retro_run() returns.  The contents must survive until
+	// then, so the back buffer is deliberately not cleared.
+	glFlush();
+#elif defined(__SWITCH__)
 	eglSwapBuffers(mApp->mWindow, mApp->mSurface);
+#ifndef __EMSCRIPTEN__
+	// Clear back buffer after swap (content undefined)
+	glClear(GL_COLOR_BUFFER_BIT);
+#endif
 #else
 	SDL_GL_SwapWindow((SDL_Window*)mApp->mWindow);
-#endif
 #ifndef __EMSCRIPTEN__
 	// Clear back buffer after swap (content undefined)
 	glClear(GL_COLOR_BUFFER_BIT);
 #endif // Emscripten: browser composites after rAF, no clear needed
+#endif
 }
 
 bool GLInterface::CreateImageTexture(MemoryImage *theImage)

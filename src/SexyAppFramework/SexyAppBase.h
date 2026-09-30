@@ -615,6 +615,11 @@ public:
 	virtual void			DoMainLoop();
 	virtual bool			UpdateAppStep(bool* updated);
 	virtual bool			UpdateApp();
+#ifdef __LIBRETRO__
+	// libretro: tear the game down and join worker threads before the core
+	// releases the application object (a joinable std::thread would terminate).
+	void					LibretroTeardown();
+#endif
 	int						InitGLInterface();
 	void					ClearUpdateBacklog(bool relaxForASecond = false);
 	bool					IsScreenSaver();

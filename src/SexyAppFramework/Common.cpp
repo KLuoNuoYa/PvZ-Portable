@@ -35,6 +35,10 @@
 
 #include "misc/PerfTimer.h"
 
+#ifdef __LIBRETRO__
+#include "platform/libretro/LibretroBackend.h"
+#endif
+
 bool Sexy::gDebug = false;
 static Sexy::MTRand gMTRand;
 namespace Sexy
@@ -81,6 +85,16 @@ void Sexy::DispatchLogLn(SexyLogPriority thePriority, std::string_view theText)
 		return;
 
 	SDL_LogMessage(SDL_LOG_CATEGORY_APPLICATION, thePriority == SexyLogPriority::Error ? SDL_LOG_PRIORITY_ERROR : SDL_LOG_PRIORITY_INFO, "%.*s", static_cast<int>(theText.size()), theText.data());
+
+#ifdef __LIBRETRO__
+	// SDL's logger is invisible inside a libretro core, so mirror everything into
+	// the frontend log as well.  The text is passed as an argument, never as the
+	// format string, because game strings may contain '%'.  The trailing newline
+	// is added here: the log-file sink below writes it itself, and the frontend
+	// log callback does not.
+	PvzLibretro::Log(thePriority == SexyLogPriority::Error ? RETRO_LOG_ERROR : RETRO_LOG_INFO,
+		"%s\n", std::string(theText).c_str());
+#endif
 
 	std::scoped_lock aLock(gLogFileSinkMutex);
 	if (gLogFileSink.is_open())

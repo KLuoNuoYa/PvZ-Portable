@@ -53,6 +53,8 @@
 #elif defined(__EMSCRIPTEN__)
 #include <emscripten.h>
 #include <emscripten/html5.h>
+#elif defined(__LIBRETRO__)
+#include "platform/libretro/LibretroBackend.h"
 #endif
 
 #include "SexyAppBase.h"
@@ -1642,7 +1644,8 @@ void SexyAppBase::DoExit([[maybe_unused]] int theCode)
 			if (typeof window.onGameExit === 'function') window.onGameExit();
 		);
 	}
-#elif (defined(__ANDROID__) && !defined(__TERMUX__)) || defined(__IPHONEOS__)
+#elif (defined(__ANDROID__) && !defined(__TERMUX__)) || defined(__IPHONEOS__) || defined(__LIBRETRO__)
+	// libretro: never exit the process; the frontend owns the lifetime.
 	Shutdown();
 #else
 	exit(theCode);
@@ -1935,6 +1938,19 @@ void SexyAppBase::Popup(const std::string& theString)
 		ErrorApplicationConfig c;
 		errorApplicationCreate(&c, "Fatal error", theString.c_str());
 		errorApplicationShow(&c);
+#elif defined(__LIBRETRO__)
+		// No modal dialogs in a libretro core: log it and show it on the OSD.
+		// The frontend's environment callback is NOT thread safe, so it may only
+		// be called from the thread the frontend drives (the loading thread also
+		// reports errors through here).
+		PvzLibretro::LogError("[pvz] %s\n", theString.c_str());
+		if (PvzLibretro::EnvironCb != nullptr && std::this_thread::get_id() == mPrimaryThreadId)
+		{
+			retro_message aMessage = {};
+			aMessage.msg = theString.c_str();
+			aMessage.frames = 600;
+			PvzLibretro::EnvironCb(RETRO_ENVIRONMENT_SET_MESSAGE, &aMessage);
+		}
 #elif !defined(__EMSCRIPTEN__)
 		if (std::this_thread::get_id() == mPrimaryThreadId)
 			SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "FATAL ERROR", theString.c_str(), nullptr);
@@ -2412,11 +2428,15 @@ void SexyAppBase::SetAlphaDisabled(bool isDisabled)
 
 void SexyAppBase::ResetCustomCursorCache()
 {
+#ifdef __LIBRETRO__
+	mCustomCursor = nullptr;
+#else
 	if (mCustomCursor != nullptr)
 	{
 		SDL_FreeCursor(mCustomCursor);
 		mCustomCursor = nullptr;
 	}
+#endif
 
 	mCustomCursorImage = nullptr;
 	mCustomCursorImageNum = -1;
@@ -2424,6 +2444,10 @@ void SexyAppBase::ResetCustomCursorCache()
 
 void SexyAppBase::EnforceCursor()
 {
+#ifdef __LIBRETRO__
+	// The frontend draws the pointer; there is no OS cursor to manage.
+	return;
+#else
 	int aCursorNum = mSEHOccured ? CURSOR_POINTER : mCursorNum;
 	if (aCursorNum < 0 || aCursorNum >= NUM_CURSORS)
 		aCursorNum = CURSOR_POINTER;
@@ -2477,6 +2501,7 @@ void SexyAppBase::EnforceCursor()
 		SDL_SetCursor(aCursor);
 
 	SDL_ShowCursor(SDL_ENABLE);
+#endif // __LIBRETRO__
 }
 
 void SexyAppBase::ProcessSafeDeleteList()
@@ -2496,6 +2521,13 @@ void SexyAppBase::ProcessSafeDeleteList()
 void SexyAppBase::UpdateFTimeAcc()
 {
 	uint32_t aCurTime = SDL_GetTicks();
+#ifdef __LIBRETRO__
+	// The libretro backend owns this clock: wall time normally, one game frame per
+	// retro_run() while the frontend is fast-forwarding.  The audio bridge renders
+	// one frame of samples per retro_run(), so a wall-clock game falls behind the
+	// music it is playing - fast-forward used to speed up the BGM only.
+	aCurTime = PvzLibretro::GameTimeMs();
+#endif
 
 	if (mLastTimeCheck != 0)
 	{
@@ -2737,7 +2769,7 @@ bool SexyAppBase::Process(bool allowSleep)
 					// Wait till next processing cycle
 					++mSleepCount;
 
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__LIBRETRO__)
 					timespec ts;
 					ts.tv_sec = aTimeToNextFrame / 1000;
 					ts.tv_nsec = (aTimeToNextFrame % 1000) * 1000000;
@@ -2763,7 +2795,7 @@ bool SexyAppBase::Process(bool allowSleep)
 				if (!allowSleep)
 					return false;
 
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__LIBRETRO__)
 				timespec ts;
 				ts.tv_sec = aLoadingYieldSleepTime / 1000;
 				ts.tv_nsec = (aLoadingYieldSleepTime % 1000) * 1000000;
@@ -2824,6 +2856,10 @@ void SexyAppBase::DoMainLoop()
 {
 #ifdef __EMSCRIPTEN__
 	emscripten_set_main_loop(SexyAppBase::EmscriptenMainLoopCallback, 0, 1);
+#elif defined(__LIBRETRO__)
+	// libretro drives the game from retro_run(); there is no loop of our own.
+	// SexyAppBase::Start() returns immediately afterwards and the frontend then
+	// steps the game one frame at a time.
 #else
 	while (!mShutdown)
 	{
@@ -2864,7 +2900,7 @@ bool SexyAppBase::UpdateAppStep(bool* updated)
 		{
 			if (mStepMode==2)
 			{
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__LIBRETRO__)
 				timespec ts;
 				ts.tv_sec = mFrameTime / 1000;
 				ts.tv_nsec = (mFrameTime % 1000) * 1000000;
@@ -2962,7 +2998,7 @@ void SexyAppBase::Start()
 	mLastTimerTime = aStartTime;
 
 	DoMainLoop();
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__LIBRETRO__)
 	ProcessSafeDeleteList();
 
 	mRunning = false;

@@ -48,6 +48,34 @@ SDLSoundManager::SDLSoundManager()
 		mBasePans[i] = 0;
 	}
 
+#ifdef __LIBRETRO__
+	// libretro has no SDL audio device.  SDL-Mixer-X's Mix_InitMixer() sets the
+	// mixer up with an explicit spec but leaves output to us, and
+	// Mix_GetGeneralMixer() then hands back the mixing function, which the core
+	// pulls once per frame and forwards to the frontend's audio callback.
+	{
+		SDL_AudioSpec aSpec;
+		SDL_zero(aSpec);
+		aSpec.freq = 44100;
+		aSpec.format = AUDIO_S16SYS;
+		aSpec.channels = 2;
+		aSpec.samples = 2048;
+		// spec.size is the mixer's decode fragment size.  Mix_OpenAudio used to
+		// get it filled in by SDL_OpenAudioDevice; Mix_InitMixer does not, so it
+		// has to be set here.  Leaving it 0 makes Mix_LoadMusic_RW -- the OGG/MP3
+		// fallback of Mix_LoadWAV_RW -- decode zero bytes per iteration while the
+		// decoder still reports "playing", so it appends an empty fragment to its
+		// list forever and eats memory without bound.
+		aSpec.size = static_cast<Uint32>(aSpec.samples) * aSpec.channels *
+			(SDL_AUDIO_BITSIZE(aSpec.format) / 8);
+
+		if (Mix_InitMixer(&aSpec, SDL_TRUE))
+		{
+			Sexy::LogInfoLn("Failed to initialize SDL mixer");
+			return;
+		}
+	}
+#else
 	if (SDL_InitSubSystem(SDL_INIT_AUDIO))
 	{
 		Sexy::LogInfoLn("Failed to initialize SDL audio subsystem");
@@ -59,6 +87,7 @@ SDLSoundManager::SDLSoundManager()
 		Sexy::LogInfoLn("Failed to initialize SDL mixer");
 		return;
 	}
+#endif
 	mInitializedMixer = true;
 
 	Mix_QuerySpec(&mMixerFreq, &mMixerFormat, &mMixerChannels);
@@ -69,16 +98,26 @@ SDLSoundManager::~SDLSoundManager()
 {
 	// Must precede Mix_CloseAudio(): ~SDLSoundInstance calls mixer functions
 	ReleaseChannels();
+#ifdef __LIBRETRO__
+	if (mInitializedMixer)
+		Mix_FreeMixer();
+#else
 	if (mInitializedMixer)
 		Mix_CloseAudio();
 
 	if (SDL_WasInit(SDL_INIT_AUDIO))
 		SDL_QuitSubSystem(SDL_INIT_AUDIO);
+#endif
 }
 
 bool SDLSoundManager::Initialized()
 {
+#ifdef __LIBRETRO__
+	// No SDL audio subsystem is ever started in a libretro core.
+	return mInitializedMixer;
+#else
 	return SDL_WasInit(SDL_INIT_AUDIO) && mInitializedMixer;
+#endif
 }
 
 bool SDLSoundManager::LoadAUSound(intptr_t theSfxID, const std::string& theFilename)

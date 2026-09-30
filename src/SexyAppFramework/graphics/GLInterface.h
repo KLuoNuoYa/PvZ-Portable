@@ -206,7 +206,6 @@ public:
 	TransformStack mTransformStack;
 
 	void					SetDrawMode(int theDrawMode);
-
 public:
 	void					AddGLImage(GLImage* theDDImage);
 	void					RemoveGLImage(GLImage* theDDImage);
@@ -247,6 +246,14 @@ public:
 	void					DrawTrianglesTexStrip(const TriVertex theVertices[], int theNumTriangles, const Color &theColor, int theDrawMode, Image *theTexture, float tx = 0, float ty = 0, bool blend = true);
 	void					FillPoly(const Point theVertices[], int theNumVertices, const Rect *theClipRect, const Color &theColor, int theDrawMode, int tx, int ty);
 };
+
+#ifdef __LIBRETRO__
+// Re-establishes the renderer's GL state (program, VBO, vertex attributes,
+// blend mode, projection).  Frontends are free to leave arbitrary GL state
+// behind between retro_run() calls, so the libretro backend calls this once per
+// frame.  Must run with the frontend's context current.
+void GfxReapplyState();
+#endif
 
 }
 
