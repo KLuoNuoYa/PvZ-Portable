@@ -456,3 +456,10 @@ build-*/
 
 # Game recordings
 *.dmo
+
+# libretro port: local dependency builds and the staged output tree.
+# See tools/libretro/README.md; build-*/ above already covers the scratch trees.
+/dist/
+/third_party/
+/libopenmpt-*.tar.gz
+/libopenmpt-*.zip
