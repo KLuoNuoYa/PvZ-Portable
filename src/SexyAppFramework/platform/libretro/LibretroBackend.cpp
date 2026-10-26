@@ -592,6 +592,12 @@ namespace
 void*	sFrontendFiber = nullptr;
 void*	sGameFiber = nullptr;
 bool	sGameFiberActive = false;
+// True only when this core converted the thread itself, i.e. when it may
+// convert it back at shutdown.  A frontend-owned fiber must be left alone.
+bool	sConvertedThread = false;
+// Set when fibers are genuinely unavailable, so the failure is logged once
+// instead of once per frame.
+bool	sFiberUnavailable = false;
 
 void CALLBACK GameFiberEntry(void*)
 {
@@ -619,22 +625,45 @@ static bool EnsureGameFiber()
 {
 	if (sGameFiber != nullptr)
 		return true;
+	if (sFiberUnavailable)
+		return false;
 
 	if (sFrontendFiber == nullptr)
 	{
-		sFrontendFiber = ConvertThreadToFiber(nullptr);
+		// FIBER_FLAG_FLOAT_SWITCH keeps the x87/SSE state across switches.  A
+		// frontend may create its fibers with it (RetroArch's Win32 message pump
+		// does), so ours has to match or floating point state leaks between them.
+		sFrontendFiber = ConvertThreadToFiberEx(nullptr, FIBER_FLAG_FLOAT_SWITCH);
+		sConvertedThread = sFrontendFiber != nullptr;
 		if (sFrontendFiber == nullptr)
 		{
-			LogError("[pvz] ConvertThreadToFiber failed (%lu); dialogs will block the frontend.\n",
-				GetLastError());
-			return false;
+			const DWORD anError = GetLastError();
+			if (anError == ERROR_ALREADY_FIBER)
+			{
+				// The frontend already runs this thread on a fiber of its own --
+				// RetroArch converts the thread when it pumps its modal window
+				// loop.  That fiber is where retro_run() was entered, so it is
+				// the fiber to return to; converting again can never succeed, and
+				// retrying once per frame would flood the frontend log.
+				sFrontendFiber = GetCurrentFiber();
+				LogInfo("[pvz] the frontend already runs this thread on a fiber; using it for dialog waits.\n");
+			}
+			else
+			{
+				sFiberUnavailable = true;
+				LogError("[pvz] ConvertThreadToFiber failed (%lu); dialogs will block the frontend.\n",
+					anError);
+				return false;
+			}
 		}
 	}
 
 	// Generous stack: the game's dialog path re-enters the whole update chain.
-	sGameFiber = CreateFiber(16u * 1024u * 1024u, GameFiberEntry, nullptr);
+	sGameFiber = CreateFiberEx(16u * 1024u * 1024u, 16u * 1024u * 1024u,
+		FIBER_FLAG_FLOAT_SWITCH, GameFiberEntry, nullptr);
 	if (sGameFiber == nullptr)
 	{
+		sFiberUnavailable = true;
 		LogError("[pvz] CreateFiber failed (%lu); dialogs will block the frontend.\n",
 			GetLastError());
 		return false;
@@ -671,11 +700,13 @@ void ShutdownGameFiber()
 	}
 	sGameFiberActive = false;
 
-	if (sFrontendFiber != nullptr)
-	{
+	// Only undo what this core did.  A fiber the frontend owns belongs to the
+	// frontend: converting it back would break the frontend's own message pump.
+	if (sFrontendFiber != nullptr && sConvertedThread)
 		ConvertFiberToThread();
-		sFrontendFiber = nullptr;
-	}
+	sFrontendFiber = nullptr;
+	sConvertedThread = false;
+	sFiberUnavailable = false;
 }
 
 #else // !_WIN32

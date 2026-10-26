@@ -448,7 +448,17 @@ SexyAppBase::~SexyAppBase()
 
 void SexyAppBase::ClearUpdateBacklog(bool relaxForASecond)
 {
+#ifdef __LIBRETRO__
+	// One clock only: UpdateFTimeAcc() compares against the backend's frame-counted
+	// GameTimeMs(), so this baseline has to come from the same clock.  Seeding it
+	// from SDL_GetTicks() makes the next delta (game clock - wall clock), which is
+	// negative whenever frames were ever late; the accumulator has no low clamp, so
+	// updates - and therefore drawing - would stop until it climbed back.  That is
+	// the stall seen after loading a state or opening the pause menu.
+	mLastTimeCheck = PvzLibretro::GameTimeMs();
+#else
 	mLastTimeCheck = SDL_GetTicks();
+#endif
 	mUpdateFTimeAcc = 0.0;
 
 	if (relaxForASecond)
@@ -2534,6 +2544,11 @@ void SexyAppBase::UpdateFTimeAcc()
 		int aDeltaTime = aCurTime - mLastTimeCheck;
 
 		mUpdateFTimeAcc = std::min(mUpdateFTimeAcc + aDeltaTime, 200.0);
+#ifdef __LIBRETRO__
+		// Never let a clock reset leave the accumulator negative: updates - and
+		// therefore drawing - would stop until it climbed back above one frame.
+		mUpdateFTimeAcc = std::max(mUpdateFTimeAcc, 0.0);
+#endif
 
 		if (mRelaxUpdateBacklogCount > 0)
 			mRelaxUpdateBacklogCount = std::max(mRelaxUpdateBacklogCount - aDeltaTime, 0);
